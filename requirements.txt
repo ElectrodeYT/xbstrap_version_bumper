@@ -1,3 +1,4 @@
 ruamel.yaml
 GitPython
 requests
+libversion

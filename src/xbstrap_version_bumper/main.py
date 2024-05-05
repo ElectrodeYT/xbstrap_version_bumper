@@ -1,9 +1,12 @@
 import os
 import pathlib
+from functools import cmp_to_key
 from typing import Any
 import hashlib
 import argparse
 
+import git
+import libversion
 import ruamel.yaml
 import requests
 from git import Repo, Actor
@@ -14,6 +17,10 @@ import xbstrap_version_bumper.linecounted_yaml
 
 global_yaml = ruamel.yaml.YAML(typ='safe')
 global_yaml.Constructor = xbstrap_version_bumper.linecounted_yaml.MyConstructor
+
+
+def sort_versions(version_list: list) -> str:
+    return sorted(version_list, key=cmp_to_key(libversion.version_compare2))[-1]
 
 
 class ProgressPrinter(RemoteProgress):
@@ -226,6 +233,36 @@ class Distro:
 
         self.__add_changes_to_stapfile(strapfile, changes)
 
+    def __get_latest_git_version(self, source):
+        if 'git' not in source:
+            return False
+        g = git.cmd.Git()
+        blob = g.ls_remote(source['git'], sort='-v:refname', tags=True)
+        available_versions = []
+        for line in blob.split('\n'):
+            available_versions.append(line.split('/')[-1])
+        newest_version = sort_versions(available_versions)
+        print(f'---> Latest git tag: {newest_version}')
+
+        if newest_version[0] == 'v':
+            newest_version = newest_version[1:]
+        print(f'---> Latest version: {newest_version}')
+
+        return newest_version
+
+    def get_latest_git_version_of_package(self, package_name):
+        strapfile, package = self.__locate_package(package_name)
+        if 'source' in package:
+            return self.__get_latest_git_version(package['source'])
+        else:
+            assert 'from_source' in package
+            strapfile, source_in_package, source = self.__locate_source(package['from_source'])
+            return self.__get_latest_git_version(source)
+
+    def get_latest_git_version_of_source(self, source_name):
+        strapfile, source_in_package, source = self.__locate_source(source_name)
+        return self.__get_latest_git_version(source)
+
     def emit_modified_yaml(self):
         for strapfile in self.strapfiles:
             if strapfile.path not in self.modified_files.keys():
@@ -246,12 +283,13 @@ def main():
     parser.add_argument('--create-branch', action='store_true')
     parser.add_argument('--commiter-name')
     parser.add_argument('--commiter-email')
+    parser.add_argument('--attempt-latest-version-autodetect', action='store_true')
     args = parser.parse_args()
 
     pprint(args)
 
-    if not (args.set_version):
-        parser.error('--set-version is required')
+    if not (args.set_version or args.attempt_latest_version_autodetect):
+        parser.error('--set-version or --attempt-latest-version-autodetect is required')
 
     if args.create_branch and (args.commiter_name is None or args.commiter_email is None):
         parser.error('--commiter-name and --commiter-email is required when creating a branch')
@@ -269,12 +307,24 @@ def main():
     print('-> Reading bootstrap files')
     distro = Distro(args.bootstrap_dir)
 
+    version_to_set = args.set_version
+    if args.attempt_latest_version_autodetect:
+        if not args.is_source:
+            attempt_version_find = distro.get_latest_git_version_of_package(args.to_modify)
+        else:
+            attempt_version_find = distro.get_latest_git_version_of_source(args.to_modify)
+        if attempt_version_find:
+            version_to_set = attempt_version_find
+
+    if version_to_set is None:
+        print('----> Failed to determine a version to set!')
+
     if args.is_source:
-        if args.set_version is not None:
-            distro.modify_source_version(args.to_modify, args.set_version)
+        if version_to_set is not None:
+            distro.modify_source_version(args.to_modify, version_to_set)
     else:
-        if args.set_version is not None:
-            distro.modify_package_version(args.to_modify, args.set_version)
+        if version_to_set is not None:
+            distro.modify_package_version(args.to_modify, version_to_set)
 
     if args.create_branch:
         print('-> Stashing current git changes and checking out new branch from master')
