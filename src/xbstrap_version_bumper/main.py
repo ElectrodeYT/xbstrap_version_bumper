@@ -1,7 +1,6 @@
 import os
 import pathlib
-import sys
-from typing import Tuple, Any
+from typing import Any
 import hashlib
 import argparse
 
@@ -11,12 +10,10 @@ from git import Repo, Actor
 from pprint import pprint
 from git import RemoteProgress
 
-import linecounted_yaml
+import xbstrap_version_bumper.linecounted_yaml
 
-global_yaml = ruamel.yaml.YAML(typ='rt')
-global_yaml.indent(sequence=4, offset=2)
-global_yaml.preserve_quotes = True
-global_yaml.Constructor = linecounted_yaml.MyConstructor
+global_yaml = ruamel.yaml.YAML(typ='safe')
+global_yaml.Constructor = xbstrap_version_bumper.linecounted_yaml.MyConstructor
 
 
 class ProgressPrinter(RemoteProgress):
@@ -43,7 +40,6 @@ class Change:
 
 class StrapFile:
     def __init__(self, path):
-        print(f'--> Reading bootstrap file "{path}"')
         self.path = path
         self.yaml = global_yaml.load(pathlib.Path(path))
         self.changes = []
@@ -140,26 +136,30 @@ class Distro:
         print(f'--> Changing version of {source_name} from {old_version} to {new_version}')
         changes.append(Change(source['version'].lc.line, old_version, new_version))
 
-        # Update the URL
-        new_url = source['url'].replace(old_version, new_version)
-        changes.append(Change(source['url'].lc.line, str(source['url']), new_url))
+        if 'url' in source:
+            new_url = source['url'].replace(old_version, new_version)
+            changes.append(Change(source['url'].lc.line, str(source['url']), new_url))
 
         if 'checksum' in source:
+            assert 'url' in source
             print(f'---> Attempting to download "{new_url}" to make new checksum')
             r = requests.get(new_url)
             new_checksum = hashlib.blake2b(r.content).hexdigest()
             changes.append(Change(source['checksum'].lc.line, str(source['checksum']), f'blake2b:{new_checksum}'))
             print(f'---> Updated checksum to blake2b:{new_checksum}')
 
-        if 'revision' in source:
-            print('--> Deleting revision')
-            source['revision'] = None
-
         if 'filename' in source:
             new_filename = source['filename'].replace(old_version, new_version)
             changes.append(Change(source['filename'].lc.line, str(source['filename']), new_filename))
 
-        # self.__update_source(strapfile, source_in_package, source, source_name)
+        if 'tag' in source:
+            new_tag = source['tag'].replace(old_version, new_version)
+            changes.append(Change(source['tag'].lc.line, str(source['tag']), new_tag))
+
+        if 'extract_path' in source:
+            new_extract_path = source['extract_path'].replace(old_version, new_version)
+            changes.append(Change(source['extract_path'].lc.line, str(source['extract_path']), new_extract_path))
+
         self.__add_changes_to_stapfile(strapfile, changes)
 
     def modify_source_version(self, source_name, new_version):
@@ -215,7 +215,8 @@ def main():
     parser.add_argument('to_modify')
     parser.add_argument('--is-source', action='store_true')
     parser.add_argument('--set-version')
-    parser.add_argument('--bootstrap-dir', default='bootstrap-managarm')
+    parser.add_argument('--bootstrap-dir', required=True)
+    parser.add_argument('--pull-from-master', action='store_true')
     parser.add_argument('--create-branch', action='store_true')
     parser.add_argument('--commiter-name')
     parser.add_argument('--commiter-email')
@@ -229,18 +230,18 @@ def main():
     if args.create_branch and (args.commiter_name is None or args.commiter_email is None):
         parser.error('--commiter-name and --commiter-email is required when creating a branch')
 
-    print("-> Ensuring local master is up to date")
     repo = Repo(args.bootstrap_dir)
     assert not repo.bare
 
-    for remote in repo.remotes:
-        if remote.name == 'origin':
-            # Pull master from origin
-            print(f'--> Pulling from origin ({remote.url})')
-            #remote.pull(progress=ProgressPrinter())
+    if args.pull_from_master:
+        for remote in repo.remotes:
+            if remote.name == 'origin':
+                # Pull master from origin
+                print(f'--> Pulling from origin ({remote.url})')
+                #remote.pull(progress=ProgressPrinter())
 
     print('-> Reading bootstrap files')
-    distro = Distro('bootstrap-managarm')
+    distro = Distro(args.bootstrap_dir)
 
     if args.is_source:
         if args.set_version is not None:
@@ -266,7 +267,3 @@ def main():
         repo.index.commit(f'{args.to_modify}: update to {args.set_version}', author=main_author)
         print('--> Returning to master')
         repo.git.checkout('master')
-
-
-if __name__ == '__main__':
-    main()

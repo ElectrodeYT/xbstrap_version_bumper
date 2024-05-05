@@ -1,2 +1,8 @@
 bootstrap-managarm
 notes.txt
+*.tar.*
+*.whl
+dist
+__pycache__
+.venv
+build

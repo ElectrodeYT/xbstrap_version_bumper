@@ -1,0 +1,30 @@
+[project]
+name = "xbstrap_version_bumper"
+version = "0.0.1"
+authors = [
+    { name="Alexander Richards", email="electrodeyt@gmail.com" },
+]
+requires-python = ">=3.8"
+description="xbstrap distro auto version bumper"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies= [
+    'GitPython >= 3.1.43',
+    'requests >= 2.31.0',
+    'ruamel.yaml >= 0.18.6'
+]
+readme = "README.md"
+
+[project.urls]
+Homepage = "https://github.com/ElectrodeYT/xbstrap_version_bumper"
+Issues = "https://github.com/ElectrodeYT/xbstrap_version_bumper/issues"
+
+[build-system]
+requires = ["setuptools>=61.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project.scripts]
+xbstrap-version-bumper = "xbstrap_version_bumper.main:main"
