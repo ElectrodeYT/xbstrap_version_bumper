@@ -28,14 +28,17 @@ class ProgressPrinter(RemoteProgress):
 
 
 class Change:
-    def __init__(self, line: int, from_str: str = "", to_str: str = "", delete_line: bool = False):
+    def __init__(self, line: int, base_str: str = "", to_str: str = "",
+                 delete_line: bool = False, insert_line: bool = False, insert_auto_indent: bool = True):
         self.line = line
-        self.from_str = from_str
+        self.base_str = base_str
         self.to_str = to_str
         self.delete_line = delete_line
+        self.insert_line = insert_line
+        self.insert_auto_indent = insert_auto_indent
 
     def apply(self, line):
-        return line.replace(self.from_str, self.to_str)
+        return line.replace(self.base_str, self.to_str)
 
 
 class StrapFile:
@@ -64,11 +67,16 @@ class StrapFile:
                 lines.append(line)
 
         deleted_lines = []
+        inserted_lines = {}
 
         for change in self.changes:
             if change.delete_line:
                 print(f'----> "{lines[change.line].strip()}" -> line removed')
                 deleted_lines.append(change.line)
+                continue
+            elif change.insert_line:
+                print(f'----> "{change.base_str.strip()}" -> line inserted')
+                inserted_lines[change.line] = change
                 continue
 
             new_line = change.apply(lines[change.line])
@@ -78,6 +86,14 @@ class StrapFile:
         self.changes.clear()
         with open(self.path, 'w') as f:
             for i, line in enumerate(lines):
+                if i in inserted_lines.keys():
+                    leading_spaces = 0
+                    # If we need to calculate the autoindent for this, base it of the line below the new one
+                    if inserted_lines[i].insert_auto_indent:
+                        leading_spaces = len(line) - len(line.lstrip())
+                    leading_spaces_str = ' ' * leading_spaces
+                    line_to_write = leading_spaces_str + inserted_lines[i].base_str + '\n'
+                    f.write(line_to_write)
                 if i not in deleted_lines:
                     f.write(line)
 
@@ -188,7 +204,17 @@ class Distro:
             self.__modify_source_impl(source, strapfile, package['from_source'], new_version)
 
         if 'revision' in package:
-            changes.append(Change(package['revision'].lc.line, delete_line=True))
+            changes.append(Change(package['revision'].lc.line,
+                                  f'revision: {package['revision']}',
+                                  'revision: 1'))
+        else:
+            if 'configure' in package:
+                revision_insert_line_num = package['configure'].lc.line - 1
+            elif 'build' in package:
+                revision_insert_line_num = package['build'].lc.line - 1
+            else:
+                raise Exception('Could not find a suitable place to insert revision tag')
+            changes.append(Change(revision_insert_line_num, 'revision: 1', insert_line=True))
 
         if 'configure' in package:
             for configure in package['configure']:
