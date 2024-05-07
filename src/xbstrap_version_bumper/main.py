@@ -36,16 +36,31 @@ class ProgressPrinter(RemoteProgress):
 
 class Change:
     def __init__(self, line: int, base_str: str = "", to_str: str = "",
-                 delete_line: bool = False, insert_line: bool = False, insert_auto_indent: bool = True):
+                 delete_line: bool = False, insert_line: bool = False, insert_auto_indent: bool = True,
+                 update_is_version=False):
         self.line = line
         self.base_str = base_str
         self.to_str = to_str
         self.delete_line = delete_line
         self.insert_line = insert_line
         self.insert_auto_indent = insert_auto_indent
+        self.update_is_version = update_is_version
 
     def apply(self, line):
-        return line.replace(self.base_str, self.to_str)
+        if not self.update_is_version:
+            return line.replace(self.base_str, self.to_str)
+
+        # This is a version, there are several ways these are commonly encoded in tags,
+        # try to support all of them
+        current_line = line
+        if self.base_str.replace('.', '_') in line:
+            current_line = current_line.replace(self.base_str.replace('.', '_'), self.to_str.replace('.', '_'))
+        if self.base_str.replace('.', '-') in line:
+            current_line = current_line.replace(self.base_str.replace('.', '-'), self.to_str.replace('.', '-'))
+        if self.base_str in line:
+            current_line = current_line.replace(self.base_str, self.to_str)
+
+        return current_line
 
 
 class StrapFile:
@@ -160,8 +175,9 @@ class Distro:
         changes.append(Change(source['version'].lc.line, old_version, new_version))
 
         if 'url' in source:
-            new_url = source['url'].replace(old_version, new_version)
-            changes.append(Change(source['url'].lc.line, str(source['url']), new_url))
+            url_change = Change(source['url'].lc.line, old_version, new_version, update_is_version=True)
+            new_url = url_change.apply(source['url'])
+            changes.append(url_change)
 
         if 'checksum' in source:
             assert 'url' in source
@@ -172,16 +188,13 @@ class Distro:
             print(f'---> Updated checksum to blake2b:{new_checksum}')
 
         if 'filename' in source:
-            new_filename = source['filename'].replace(old_version, new_version)
-            changes.append(Change(source['filename'].lc.line, str(source['filename']), new_filename))
+            changes.append(Change(source['filename'].lc.line, old_version, new_version, update_is_version=True))
 
         if 'tag' in source:
-            new_tag = source['tag'].replace(old_version, new_version)
-            changes.append(Change(source['tag'].lc.line, str(source['tag']), new_tag))
+            changes.append(Change(source['tag'].lc.line, old_version, new_version, update_is_version=True))
 
         if 'extract_path' in source:
-            new_extract_path = source['extract_path'].replace(old_version, new_version)
-            changes.append(Change(source['extract_path'].lc.line, str(source['extract_path']), new_extract_path))
+            changes.append(Change(source['extract_path'].lc.line, old_version, new_version, update_is_version=True))
 
         self.__add_changes_to_stapfile(strapfile, changes)
 
@@ -190,11 +203,11 @@ class Distro:
         strapfile, source_in_package, source = self.__locate_source(source_name)
         self.__modify_source_impl(source, strapfile, source_name, new_version)
 
-    def __args_to_changes(self, args, from_str, to_str):
+    def __args_to_changes(self, args, from_str, to_str, update_is_version=False):
         changes = []
         for arg in args:
             if from_str in arg:
-                changes.append(Change(arg.lc.line, from_str, to_str))
+                changes.append(Change(arg.lc.line, from_str, to_str, update_is_version=update_is_version))
 
         return changes
 
@@ -225,11 +238,11 @@ class Distro:
 
         if 'configure' in package:
             for configure in package['configure']:
-                changes += self.__args_to_changes(configure['args'], old_version, new_version)
+                changes += self.__args_to_changes(configure['args'], old_version, new_version, update_is_version=True)
 
         if 'build' in package:
             for build in package['build']:
-                changes += self.__args_to_changes(build['args'], old_version, new_version)
+                changes += self.__args_to_changes(build['args'], old_version, new_version, update_is_version=True)
 
         self.__add_changes_to_stapfile(strapfile, changes)
 
@@ -284,9 +297,16 @@ def main():
     parser.add_argument('--commiter-name')
     parser.add_argument('--commiter-email')
     parser.add_argument('--attempt-latest-version-autodetect', action='store_true')
+    parser.add_argument('--try-global-update', action='store_true')
     args = parser.parse_args()
 
     pprint(args)
+
+    if not args.try_global_update and args.to_modify is None:
+        parser.error('to_modify is needed if --try-global-update is not given')
+
+    if args.try_global_update and not args.attempt_latest_version_autodetect:
+        parser.error('--try-global-update requires --attempt-latest-version-autodetect')
 
     if not (args.set_version or args.attempt_latest_version_autodetect):
         parser.error('--set-version or --attempt-latest-version-autodetect is required')
@@ -302,7 +322,7 @@ def main():
             if remote.name == 'origin':
                 # Pull master from origin
                 print(f'--> Pulling from origin ({remote.url})')
-                #remote.pull(progress=ProgressPrinter())
+                remote.pull(progress=ProgressPrinter())
 
     print('-> Reading bootstrap files')
     distro = Distro(args.bootstrap_dir)
