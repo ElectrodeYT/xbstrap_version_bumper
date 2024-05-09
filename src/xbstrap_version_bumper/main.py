@@ -19,8 +19,8 @@ global_yaml = ruamel.yaml.YAML(typ='safe')
 global_yaml.Constructor = xbstrap_version_bumper.linecounted_yaml.MyConstructor
 
 
-def sort_versions(version_list: list) -> str:
-    return sorted(version_list, key=cmp_to_key(libversion.version_compare2))[-1]
+def sort_versions(version_list: list) -> []:
+    return sorted(version_list, key=cmp_to_key(libversion.version_compare2))
 
 
 class ProgressPrinter(RemoteProgress):
@@ -154,9 +154,9 @@ class Distro:
         for strapfile in self.strapfiles:
             if 'packages' in strapfile.yaml:
                 for package in strapfile.yaml['packages']:
-                    if 'source' in package and package['name'] == package_name:
+                    if package['name'] == package_name:
                         return strapfile, package
-
+        print(f'Could not find package: {package_name}')
         return False, False
 
     def __add_changes_to_stapfile(self, strapfile: StrapFile, changes: []):
@@ -246,31 +246,54 @@ class Distro:
 
         self.__add_changes_to_stapfile(strapfile, changes)
 
-    def __get_latest_git_version(self, source):
+    def __get_latest_git_version(self, source, package_name=None):
         if 'git' not in source:
             return False
         g = git.cmd.Git()
         blob = g.ls_remote(source['git'], sort='-v:refname', tags=True)
         available_versions = []
         for line in blob.split('\n'):
-            available_versions.append(line.split('/')[-1])
-        newest_version = sort_versions(available_versions)
-        print(f'---> Latest git tag: {newest_version}')
+            ver = line.split('/')[-1]
+            if '^{}' in ver:
+                continue
+            if not any(char.isdigit() for char in ver):
+                print(f'-> NOTE: skipping version {ver} because it does not contain any number')
+                continue
+            if package_name is not None and package_name in ver:
+                ver = ver.replace(package_name, '')
+                if ver[0] in ['-', '_']:
+                    ver = ver[1:]
+            if ver[0] == 'v':
+                ver = ver[1:]
+            available_versions.append(ver)
+        sorted_versions = sort_versions(available_versions)
+        print(f'---> Latest git tag: {sorted_versions[-1]}')
 
-        if newest_version[0] == 'v':
-            newest_version = newest_version[1:]
-        print(f'---> Latest version: {newest_version}')
+        # Try and find the latest version which is not a prerelease, fallback to latest git tag if
+        # none are found
+        newest_non_prerelease = None
+        for version in reversed(sorted_versions):
+            prerelease_chars = ['a', 'b']
+            if any(char in version for char in prerelease_chars):
+                print(f'-> NOTE: skipping version {version} because it appears to be a prerelease version')
+                continue
+            newest_non_prerelease = version
+            break
 
-        return newest_version
+        if newest_non_prerelease is None:
+            print('-> NOTE: couldnt find a non-prerelease version, falling back to prerelease version')
+            newest_non_prerelease = sorted_versions[-1]
+
+        return newest_non_prerelease
 
     def get_latest_git_version_of_package(self, package_name):
         strapfile, package = self.__locate_package(package_name)
         if 'source' in package:
-            return self.__get_latest_git_version(package['source'])
+            return self.__get_latest_git_version(package['source'], package_name)
         else:
             assert 'from_source' in package
             strapfile, source_in_package, source = self.__locate_source(package['from_source'])
-            return self.__get_latest_git_version(source)
+            return self.__get_latest_git_version(source, package_name)
 
     def get_latest_git_version_of_source(self, source_name):
         strapfile, source_in_package, source = self.__locate_source(source_name)
