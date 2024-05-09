@@ -1,6 +1,6 @@
 [project]
 name = "xbstrap_version_bumper"
-version = "0.0.5"
+version = "0.0.6"
 authors = [
     { name="Alexander Richards", email="electrodeyt@gmail.com" },
 ]
